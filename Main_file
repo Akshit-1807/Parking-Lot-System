@@ -1,0 +1,176 @@
+from datetime import datetime
+from abc import ABC, abstractmethod
+from flask import Flask
+
+app = Flask(__name__)
+
+class Gate:
+    def __init__(self, gate_id, current_operator):
+        self.gate_id = gate_id
+        self.current_operator = current_operator
+
+class Operator:
+    def __init__(self, operator_id):
+        self.operator_id = operator_id
+
+class Vehicle:
+    def __init__(self, vehicle_number, vehicle_type):
+        self.vehicle_number = vehicle_number
+        self.vehicle_type = vehicle_type
+
+class ParkingSpot:
+    def __init__(self, spot_id):
+        self.spot_id = spot_id
+
+class ParkingLot:
+    def __init__(self, lot_id):
+        self.lot_id = lot_id
+        self.gates = []
+
+class Ticket:
+    def __init__(self):
+        self.parking_spot = None
+        self.gate = None
+        self.entry_time = None
+        self.vehicle = None
+        self.operator = None
+
+class InvalidGateException(Exception):
+    pass
+
+class NoAvailableSpotException(Exception):
+    pass
+
+class IGateRepository(ABC):
+    @abstractmethod
+    def find_gate_by_id(self, gate_id):
+        pass
+
+class GateRepository(IGateRepository):
+    def __init__(self):
+        self.gates = {}
+
+    def find_gate_by_id(self, gate_id):
+        return self.gates.get(gate_id)
+
+class IVehicleRepository(ABC):
+    @abstractmethod
+    def find_vehicle_by_number(self, vehicle_number):
+        pass
+
+    @abstractmethod
+    def save_vehicle(self, vehicle):
+        pass
+
+class VehicleRepository(IVehicleRepository):
+    def __init__(self):
+        self.vehicles = {}
+
+    def find_vehicle_by_number(self, vehicle_number):
+        return self.vehicles.get(vehicle_number)
+
+    def save_vehicle(self, vehicle):
+        self.vehicles[vehicle.vehicle_number] = vehicle
+
+class IParkingLotRepository(ABC):
+    @abstractmethod
+    def get_parking_lot_of_gate(self, gate):
+        pass
+
+class ParkingLotRepository(IParkingLotRepository):
+    def __init__(self):
+        self.parking_lots = {}
+
+    def get_parking_lot_of_gate(self, gate):
+        for parking_lot in self.parking_lots.values():
+            if gate in parking_lot.gates:
+                return parking_lot
+        return None
+
+class ITicketRepository(ABC):
+    @abstractmethod
+    def save_ticket(self, ticket):
+        pass
+
+class TicketRepository(ITicketRepository):
+    def __init__(self):
+        self.tickets = {}
+        self.last_saved_id = 0
+
+    def save_ticket(self, ticket):
+        self.last_saved_id += 1
+        ticket.ticket_id = self.last_saved_id
+        self.tickets[self.last_saved_id] = ticket
+
+class SpotAssignmentStrategy:
+    def find_spot(self, vehicle_type, parking_lot, gate):
+        pass
+
+class RandomSpotAssignmentStrategy(SpotAssignmentStrategy):
+    def find_spot(self, vehicle_type, parking_lot, gate):
+        return ParkingSpot(1)
+
+class ITicketService(ABC):
+    @abstractmethod
+    def generate_ticket(self, gate_id, vehicle_type, vehicle_number):
+        pass
+
+class TicketService(ITicketService):
+    def __init__(self, gate_repository, vehicle_repository,
+                 spot_assignment_strategy, ticket_repository, parking_lot_repository):
+        self.gate_repository = gate_repository
+        self.vehicle_repository = vehicle_repository
+        self.spot_assignment_strategy = spot_assignment_strategy
+        self.ticket_repository = ticket_repository
+        self.parking_lot_repository = parking_lot_repository
+
+    def generate_ticket(self, gate_id, vehicle_type, vehicle_number):
+        gate = self.gate_repository.find_gate_by_id(gate_id)
+
+        if not gate:
+            raise InvalidGateException()
+
+        operator = gate.current_operator
+
+        vehicle = self.vehicle_repository.find_vehicle_by_number(vehicle_number)
+
+        if not vehicle:
+            vehicle = Vehicle(vehicle_number, vehicle_type)
+            self.vehicle_repository.save_vehicle(vehicle)
+
+        parking_lot = self.parking_lot_repository.get_parking_lot_of_gate(gate)
+
+        if not parking_lot:
+            raise RuntimeError()
+
+        parking_spot = self.spot_assignment_strategy.find_spot(vehicle_type, parking_lot, gate)
+
+        if not parking_spot:
+            raise NoAvailableSpotException()
+
+        ticket = Ticket()
+        ticket.parking_spot = parking_spot
+        ticket.gate = gate
+        ticket.entry_time = datetime.now()
+        ticket.vehicle = vehicle
+        ticket.operator = operator
+
+        self.ticket_repository.save_ticket(ticket)
+        return ticket
+
+@app.route('/')
+def home():
+    return 'Application has started on port 3000'
+
+if __name__ == '__main__':
+    gate_repository = GateRepository()
+    vehicle_repository = VehicleRepository()
+    spot_assignment_strategy = RandomSpotAssignmentStrategy()
+    ticket_repository = TicketRepository()
+    parking_lot_repository = ParkingLotRepository()
+
+    ticket_service = TicketService(gate_repository, vehicle_repository,
+                                   spot_assignment_strategy, ticket_repository, parking_lot_repository)
+
+    app.run(debug=True, host="0.0.0.0", port=3000)
+
